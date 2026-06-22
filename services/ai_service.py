@@ -6,6 +6,7 @@ import socket
 from typing import Dict, Any
 from groq import Groq, APIConnectionError
 
+# Fix para Render IPv6
 socket.has_ipv6 = False
 
 from core.config import settings
@@ -20,6 +21,10 @@ class IAService:
         )
 
     def analizar_necesidad(self, necesidad: NecesidadPAA) -> Dict[str, Any]:
+        """
+        Analiza una necesidad del PAA usando Groq.
+        Si falla, usa análisis local como fallback.
+        """
         if settings.modo_offline:
             return self._analisis_local(necesidad)
 
@@ -37,8 +42,11 @@ class IAService:
             data.update(necesidad.to_dict())
             data["motor_ia"] = f"Groq {settings.ia_model}"
             return data
+        except APIConnectionError as e:
+            logging.error(f"Error de conexión con Groq: {e}. Usando fallback local.")
+            return self._analisis_local(necesidad)
         except Exception as e:
-            logging.error(f"Error Groq: {e}. Usando fallback local.")
+            logging.error(f"Error inesperado con Groq: {e}. Usando fallback local.")
             return self._analisis_local(necesidad)
 
     def _system_prompt(self) -> str:
@@ -56,7 +64,7 @@ class IAService:
         Clasifica esta necesidad del Plan Anual de Adquisiciones PAA Colombia.
 
         SMMLV 2026 = ${smmlv:,}
-        Valor = ${n.valor:,} = {valor_smmlv:.1f} SMMLV
+        Valor de la necesidad = ${n.valor:,} = {valor_smmlv:.1f} SMMLV
 
         DATOS:
         Dependencia: {n.dependencia}
@@ -66,23 +74,29 @@ class IAService:
 
         INSTRUCCIONES ESTRICTAS:
         1. codigo_unspsc: Código UNSPSC de 8 dígitos del BIEN o SERVICIO PRINCIPAL.
-           Usa estos ejemplos:
-           - computadores, portátiles, PC = 43211503
-           - impresoras, escáneres = 43212105
-           - licencias software, Office 365 = 43232300
-           - mantenimiento computadores = 81112200
-           - consultoría = 80101500
-           - servicio aseo = 76111501
-           PROHIBIDO usar 71123000 "Servicios de adquisición" salvo que el objeto sea literalmente eso.
+           Usa estos ejemplos como guía obligatoria:
+           - computadores, portátiles, PC, laptop = 43211503
+           - impresoras, escáneres, scanner = 43212105
+           - licencias software, Office 365, antivirus = 43232300
+           - mantenimiento computadores, soporte técnico = 81112200
+           - consultoría, asesoría = 80101500
+           - servicio de aseo, cafetería, limpieza = 76111501
+           - papelería = 44121600
+           - muebles oficina = 56101700
+           PROHIBIDO usar 71123000 "Servicios de adquisición" salvo que el objeto sea literalmente contratar a alguien para que compre por ti.
 
-        2. modalidad_recomendada: Según Ley 80/1993:
+        2. modalidad_recomendada: Según Ley 80/1993 y Ley 1150/2007:
            - Valor <= 28 SMMLV: "Mínima Cuantía"
            - Valor > 28 y <= 182 SMMLV: "Selección Abreviada de Menor Cuantía"
            - Valor > 182 SMMLV: "Licitación Pública"
 
-        3. riesgos: "Alto", "Medio" o "Bajo". Si valor > 182 SMMLV = "Alto".
+        3. riesgos: "Alto", "Medio" o "Bajo".
+           - Si valor > 182 SMMLV = "Alto"
+           - Si valor entre 28 y 182 SMMLV = "Medio"
+           - Si valor <= 28 SMMLV = "Bajo"
 
-        4. justificacion: Una línea explicando la modalidad con el valor en SMMLV.
+        4. justificacion: Una línea explicando la modalidad.
+           Ejemplo: "Valor de 105.3 SMMLV está entre 28 y 182 SMMLV, corresponde Selección Abreviada según Ley 80/1993".
 
         Responde SOLO este JSON:
         {{
@@ -97,6 +111,7 @@ class IAService:
         smmlv = settings.smmlv_2026
         valor_smmlv = n.valor / smmlv
 
+        # Lógica modalidad según SMMLV
         if n.valor <= 28 * smmlv:
             modalidad = "Mínima Cuantía"
             riesgo = "Bajo"
@@ -107,28 +122,32 @@ class IAService:
             modalidad = "Licitación Pública"
             riesgo = "Alto"
 
-        # Fallback UNSPSC por palabra clave - NO LO BORRES
+        # Fallback UNSPSC por palabra clave - NO BORRAR
         obj = n.objeto.lower()
-        if any(w in obj for w in ["computador", "portatil", "pc", "laptop"]):
+        if any(w in obj for w in ["computador", "portatil", "pc", "laptop", "desktop"]):
             unspsc = "43211503"
-        elif any(w in obj for w in ["impresora", "escaner", "scanner"]):
+        elif any(w in obj for w in ["impresora", "escaner", "scanner", "multifuncional"]):
             unspsc = "43212105"
-        elif any(w in obj for w in ["software", "licencia", "office", "antivirus"]):
+        elif any(w in obj for w in ["software", "licencia", "office", "antivirus", "windows"]):
             unspsc = "43232300"
-        elif any(w in obj for w in ["mantenimiento", "soporte"]):
+        elif any(w in obj for w in ["mantenimiento", "soporte", "reparacion"]):
             unspsc = "81112200"
-        elif any(w in obj for w in ["consultoria", "asesoria"]):
+        elif any(w in obj for w in ["consultoria", "asesoria", "auditoria"]):
             unspsc = "80101500"
-        elif any(w in obj for w in ["aseo", "cafeteria", "limpieza"]):
+        elif any(w in obj for w in ["aseo", "cafeteria", "limpieza", "vigilancia"]):
             unspsc = "76111501"
+        elif any(w in obj for w in ["papeleria", "toner", "papel"]):
+            unspsc = "44121600"
+        elif any(w in obj for w in ["mueble", "silla", "escritorio"]):
+            unspsc = "56101700"
         else:
-            unspsc = "43211507"
+            unspsc = "43211507" # Genérico computadores
 
         return {
             "codigo_unspsc": unspsc,
             "modalidad_recomendada": modalidad,
             "riesgos": riesgo,
-            "justificacion": f"Fallback local. Valor {valor_smmlv:.1f} SMMLV = {modalidad}",
+            "justificacion": f"Fallback local. Valor {valor_smmlv:.1f} SMMLV = {modalidad} según Ley 80/1993",
             **n.to_dict(),
             "motor_ia": "Fallback local"
         }
