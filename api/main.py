@@ -26,7 +26,7 @@ def get_cuantias(anio: int):
         2023: 1160000,
         2024: 1300000,
         2025: 1423500,
-        2026: 2000000
+        2026: 1423500
     }
     if anio not in smmlv_dict:
         raise HTTPException(status_code=404, detail=f"SMMLV para año {anio} no configurado")
