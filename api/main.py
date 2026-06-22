@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from models import NecesidadPAA
-from services import IAService
+from app.services.ai_service import IAService
 from core.config import settings
 from dotenv import load_dotenv
 import os

@@ -1,7 +1,7 @@
 # app.py
 from core.config import settings
 from models import NecesidadPAA
-from services import IAService
+from app.services.ai_service import IAService
 
 def main():
     n = NecesidadPAA(
