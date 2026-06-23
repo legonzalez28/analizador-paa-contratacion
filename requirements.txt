@@ -1,5 +1,13 @@
+<<<<<<< HEAD
 ﻿fastapi==0.115.0
 uvicorn[standard]==0.30.6
 openai==1.40.0
 httpx==0.27.0
 pydantic==2.8.2
+=======
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+openai==1.40.0
+httpx==0.27.0
+pydantic==2.8.2
+>>>>>>> 0218ff52f5a2f4106c185ca63257fffb22eb42cb
