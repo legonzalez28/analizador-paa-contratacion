@@ -1,17 +1,16 @@
-# api main module
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from app.services.ai_service import IAService
-from app.models.paa_models import NecesidadPAA
-from app.core.config import settings
 
-app = FastAPI(title="Analizador PAA Contratacion")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app = FastAPI()
 ia_service = IAService()
+
+class NecesidadRequest(BaseModel):
+    descripcion: str
+
+@app.post("/analizar")
+def analizar_necesidad(request: NecesidadRequest):
+    resultado = ia_service.analizar_necesidad(request.descripcion)
+    if "error" in resultado:
+        raise HTTPException(status_code=400, detail=resultado["error"])
+    return resultado
