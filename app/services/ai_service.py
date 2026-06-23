@@ -1,98 +1,106 @@
 import os
-import json
 import logging
 from openai import OpenAI
-from openai import APIError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
 class IAService:
     def __init__(self):
         """
-        Inicializa el cliente de OpenAI.
-        Lee la API key de /etc/secrets/OPENAI_API_KEY primero, luego de env vars.
-        Esto evita crash en startup si la key no está.
+        Inicializa el servicio. Si MODO_OFFLINE=true, usa mocks.
+        Si no, valida que exista OPENAI_API_KEY y crea el cliente.
         """
-        api_key = self._get_api_key()
-        if not api_key:
-            raise ValueError("Falta OPENAI_API_KEY en /etc/secrets/ o como variable de entorno")
-        self.client = OpenAI(api_key=api_key)
+        self.modo_offline = os.getenv("MODO_OFFLINE", "false").lower() == "true"
 
-    def _get_api_key(self) -> str:
+        if self.modo_offline:
+            logger.info("IAService iniciado en MODO_OFFLINE. Usando respuestas mock.")
+            self.client = None
+        else:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("Falta OPENAI_API_KEY en variables de entorno")
+            self.client = OpenAI(api_key=api_key)
+            logger.info("IAService iniciado con OpenAI gpt-4o-mini.")
+
+    def _analizar_con_mock(self, texto: str) -> dict:
         """
-        Busca la API key en 2 lugares:
-        1. Secret File de Render: /etc/secrets/OPENAI_API_KEY
-        2. Variable de entorno: OPENAI_API_KEY
+        Respuesta simulada para desarrollo sin gastar tokens.
         """
-        # 1. Intenta leer Secret File de Render
-        secret_path = "/etc/secrets/OPENAI_API_KEY"
-        try:
-            if os.path.exists(secret_path):
-                with open(secret_path, "r") as f:
-                    key = f.read().strip()
-                    if key:
-                        logger.info("API Key cargada desde Secret File")
-                        return key
-        except Exception as e:
-            logger.warning(f"No se pudo leer Secret File: {e}")
+        logger.info(f"Generando respuesta MOCK para: {texto[:40]}...")
 
-        # 2. Fallback a variable de entorno para desarrollo local
-        env_key = os.getenv("OPENAI_API_KEY")
-        if env_key:
-            logger.info("API Key cargada desde variable de entorno")
-            return env_key.strip()
+        # Lógica simple para que el mock se vea real
+        modalidad = "Licitación Pública"
+        if "50" in texto or "menor" in texto.lower():
+            modalidad = "Selección Abreviada de Menor Cuantía"
+        if "software" in texto.lower() or "licencia" in texto.lower():
+            modalidad = "Contratación Directa"
 
-        return None
+        return {
+            "analisis": f"""[MOCK] Análisis para: {texto}
 
-    def analizar_necesidad(self, texto: str) -> dict:
+1. Objeto sugerido: {texto}. Verificar especificaciones técnicas en estudios previos.
+2. Modalidad probable: {modalidad}. Validar cuantía contra presupuesto 2026 y SMMLV.
+3. Riesgos clave:
+   - Estudios de mercado desactualizados
+   - Falta de pluralidad de oferentes
+   - Incumplimiento de cronograma PAA
+4. Recomendaciones SECOP II:
+   - Publicar en Plan Anual de Adquisiciones
+   - Usar pliegos tipo si aplica
+   - Verificar código UNSPSC correcto""",
+            "modelo_usado": "mock-offline-v1",
+            "modalidad_sugerida": modalidad,
+            "recomendaciones": [
+                "Validar en SECOP II",
+                "Revisar Manual de Contratación de la entidad",
+                "Confirmar disponibilidad presupuestal CDP"
+            ],
+            "estado": "ok"
+        }
+
+    def _analizar_con_openai(self, texto: str) -> dict:
         """
-        Analiza una necesidad del PAA usando OpenAI.
-        Devuelve JSON con: analisis, modalidad_sugerida, recomendaciones
+        Llama a la API real de OpenAI.
         """
-        if not texto or len(texto.strip()) < 10:
-            return {"error": "La descripción es muy corta. Mínimo 10 caracteres."}
-
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=os.getenv("IA_MODEL", "gpt-4o-mini"),
                 messages=[
                     {
                         "role": "system",
-                        "content": """Eres experto en contratación pública de Colombia: Ley 80 de 1993, Ley 1150 de 2007, Decreto 1082 de 2015.
-Analiza necesidades del Plan Anual de Adquisiciones PAA.
-Si detectas palabras como 'apoyar', 'acompañamiento', 'asistir', 'demás actividades', evalúa Contratación Directa por prestación de servicios profesionales.
-Si detectas 'obra', 'construcción', 'adecuación', 'mantenimiento', evalúa Licitación Pública, Selección Abreviada o Mínima Cuantía según cuantía.
-Si detectas 'consultoría', 'estudios', 'diseños', evalúa Concurso de Méritos.
-Responde SOLO en JSON válido con estas 3 claves exactas:
-1. "analisis": resumen técnico de máximo 3 líneas
-2. "modalidad_sugerida": una de [Licitación Pública, Selección Abreviada, Concurso de Méritos, Contratación Directa, Mínima Cuantía]
-3. "recomendaciones": array de 2 strings con recomendaciones puntuales para SECOP II"""
+                        "content": "Eres experto en contratación pública Colombia. Analiza necesidades PAA. Entrega: 1. Objeto sugerido, 2. Modalidad probable según cuantía y Decreto 1082/2015, 3. Riesgos clave, 4. Recomendaciones para SECOP II."
                     },
                     {
                         "role": "user",
-                        "content": f"Necesidad del PAA a analizar: {texto}"
+                        "content": f"Analiza esta necesidad del PAA: {texto}"
                     }
                 ],
                 temperature=0.2,
-                response_format={"type": "json_object"},
-                max_tokens=500
+                max_tokens=800
             )
-
-            content = response.choices[0].message.content
-            return json.loads(content)
-
-        except RateLimitError:
-            logger.error("Rate limit de OpenAI alcanzado")
-            return {"error": "Límite de consultas alcanzado. Intenta en 1 minuto."}
-
-        except APIError as e:
-            logger.error(f"Error de API OpenAI: {e}")
-            return {"error": f"Error en servicio de IA: {str(e)}"}
-
-        except json.JSONDecodeError as e:
-            logger.error(f"OpenAI no devolvió JSON válido: {e}")
-            return {"error": "La IA devolvió respuesta inválida. Intenta de nuevo."}
-
+            return {
+                "analisis": response.choices[0].message.content,
+                "modelo_usado": "gpt-4o-mini",
+                "modalidad_sugerida": "Extraída del análisis",
+                "recomendaciones": ["Ver análisis completo"],
+                "estado": "ok"
+            }
         except Exception as e:
-            logger.error(f"Error inesperado en analizar_necesidad: {e}")
-            return {"error": f"Fallo al analizar: {str(e)}"}
+            logger.error(f"Error llamando a OpenAI: {e}")
+            # Capturamos errores específicos de OpenAI
+            if "rate_limit" in str(e).lower():
+                return {"error": "Límite de consultas alcanzado. Intenta en 1 minuto."}
+            if "insufficient_quota" in str(e).lower():
+                return {"error": "Sin saldo en cuenta OpenAI. Verificar facturación."}
+            if "invalid_api_key" in str(e).lower():
+                return {"error": "API Key de OpenAI inválida."}
+            return {"error": f"Error del proveedor IA: {str(e)}"}
+
+    def analizar_necesidad(self, texto: str) -> dict:
+        """
+        Punto de entrada principal. Decide si usar mock o OpenAI real.
+        """
+        if self.modo_offline:
+            return self._analizar_con_mock(texto)
+        else:
+            return self._analizar_con_openai(texto)        
